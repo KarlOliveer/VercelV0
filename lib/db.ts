@@ -203,3 +203,54 @@ export async function createUser(userData: Omit<User, "id" | "createdAt" | "upda
   }
 }
 
+export async function updateUser(id: string, userData: Partial<User>): Promise<User> {
+  try {
+    const users = await getUsers()
+    const index = users.findIndex((user) => user.id === id)
+    
+    if (index === -1) {
+      throw new Error("User not found")
+    }
+
+    // Prevent updating admin user
+    if (users[index].username === "admin.admin") {
+      throw new Error("Cannot update admin user")
+    }
+
+    const updatedUser = {
+      ...users[index],
+      ...userData,
+      updatedAt: new Date().toISOString(),
+    }
+
+    users[index] = updatedUser
+    await writeFile(USERS_FILE, JSON.stringify(users, null, 2))
+
+    return updatedUser
+  } catch (error) {
+    console.error("Error updating user:", error)
+    throw error instanceof Error ? error : new Error("Unknown error occurred while updating user")
+  }
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  try {
+    const users = await getUsers()
+    const user = users.find((u) => u.id === id)
+
+    if (!user) {
+      throw new Error("User not found")
+    }
+
+    // Prevent deleting admin user
+    if (user.username === "admin.admin") {
+      throw new Error("Cannot delete admin user")
+    }
+
+    const filteredUsers = users.filter((u) => u.id !== id)
+    await writeFile(USERS_FILE, JSON.stringify(filteredUsers, null, 2))
+  } catch (error) {
+    console.error("Error deleting user:", error)
+    throw error instanceof Error ? error : new Error("Unknown error occurred while deleting user")
+  }
+}

@@ -13,6 +13,11 @@ import { getSession } from "@/lib/auth"
 
 const inter = Inter({ subsets: ["latin"] })
 
+export const metadata = {
+  title: "MCM Systems",
+  description: "Sistema de Gerenciamento MCM",
+}
+
 export default async function RootLayout({
   children,
 }: {
@@ -55,11 +60,3 @@ export default async function RootLayout({
     </html>
   )
 }
-
-
-
-import './globals.css'
-
-export const metadata = {
-      generator: 'v0.dev'
-    };
