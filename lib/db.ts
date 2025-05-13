@@ -1,122 +1,47 @@
-import { writeFile, readFile, mkdir } from "fs/promises"
-import { existsSync } from "fs"
-import path from "path"
+import { createClient } from '@supabase/supabase-js'
 import type { User } from "@/types/user"
 
-// Add this helper function at the top of the file with other imports
-function validateUserObject(user: any): user is User {
-  return (
-    typeof user === "object" &&
-    user !== null &&
-    typeof user.id === "string" &&
-    typeof user.firstName === "string" &&
-    typeof user.lastName === "string" &&
-    typeof user.username === "string" &&
-    typeof user.password === "string" &&
-    typeof user.role === "string" &&
-    typeof user.permissions === "object" &&
-    user.permissions !== null &&
-    typeof user.createdAt === "string" &&
-    typeof user.updatedAt === "string"
-  )
-}
+// Create Supabase client
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
-// Define database paths
-const DB_PATH = path.join(process.cwd(), "data")
-const USERS_FILE = path.join(DB_PATH, "users.json")
-
-// Admin user configuration - IMPORTANT: DO NOT CHANGE THESE CREDENTIALS
-const ADMIN_USER: User = {
-  id: "1",
-  firstName: "Admin",
-  lastName: "Admin",
-  username: "admin.admin",
-  password: "admingenerico", // Fixed admin password
-  role: "admin",
-  permissions: {
-    createProjects: true,
-    editProjects: true,
-    deleteProjects: true,
-    downloadReports: true,
-    createUsers: true,
-    editUsers: true,
-    deleteUsers: true,
-    createTests: true,
-    editTests: true,
-    deleteTests: true,
-    createStock: true,
-    editStock: true,
-    deleteStock: true,
-  },
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-}
-
-// Initialize database and ensure admin user exists
-async function initializeDatabase() {
-  try {
-    // Create data directory if it doesn't exist
-    if (!existsSync(DB_PATH)) {
-      await mkdir(DB_PATH, { recursive: true })
-    }
-
-    // Initialize with admin user
-    let users: User[] = []
-
-    // Try to read existing users
-    if (existsSync(USERS_FILE)) {
-      try {
-        const content = await readFile(USERS_FILE, "utf-8")
-        users = JSON.parse(content)
-      } catch (error) {
-        console.error("Error reading users file, initializing with admin only:", error)
-        users = []
-      }
-    }
-
-    // Ensure admin user exists with correct credentials
-    const adminIndex = users.findIndex((user) => user.username === "admin.admin")
-    if (adminIndex !== -1) {
-      users[adminIndex] = ADMIN_USER // Replace existing admin with correct credentials
-    } else {
-      users.unshift(ADMIN_USER) // Add admin at the beginning if not exists
-    }
-
-    // Write users to file
-    await writeFile(USERS_FILE, JSON.stringify(users, null, 2))
-    console.log("Database initialized successfully with admin user")
-    return true
-  } catch (error) {
-    console.error("Failed to initialize database:", error)
-    return false
+// Helper function to convert database user to application user
+function dbUserToAppUser(dbUser: any): User {
+  return {
+    id: dbUser.id,
+    firstName: dbUser.first_name,
+    lastName: dbUser.last_name,
+    username: dbUser.username,
+    password: dbUser.password,
+    role: dbUser.role,
+    permissions: dbUser.permissions,
+    createdAt: dbUser.created_at,
+    updatedAt: dbUser.updated_at
   }
 }
-
-// Initialize database on module load
-initializeDatabase().catch(console.error)
 
 export async function validateUser(username: string, password: string): Promise<Omit<User, "password"> | null> {
   try {
     console.log(`Attempting to validate user: ${username}`)
 
-    // Special case for admin user
-    if (username === "admin.admin" && password === "admingenerico") {
-      console.log("Admin login attempt successful")
-      const { password: _, ...adminWithoutPassword } = ADMIN_USER
-      return adminWithoutPassword
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', username)
+      .eq('password', password)
+      .single()
+
+    if (error || !user) {
+      console.log(`Invalid credentials for user: ${username}`)
+      return null
     }
 
-    const users = await getUsers()
-    const user = users.find((u) => u.username === username && u.password === password)
-
-    if (user) {
-      console.log(`User ${username} validated successfully`)
-      const { password: _, ...userWithoutPassword } = user
-      return userWithoutPassword
-    }
-
-    console.log(`Invalid credentials for user: ${username}`)
-    return null
+    console.log(`User ${username} validated successfully`)
+    const appUser = dbUserToAppUser(user)
+    const { password: _, ...userWithoutPassword } = appUser
+    return userWithoutPassword
   } catch (error) {
     console.error("Error validating user:", error)
     return null
@@ -125,78 +50,48 @@ export async function validateUser(username: string, password: string): Promise<
 
 export async function getUsers(): Promise<User[]> {
   try {
-    if (!existsSync(USERS_FILE)) {
-      console.log("Users file doesn't exist, initializing with admin user")
-      await initializeDatabase()
-      return [ADMIN_USER]
+    const { data: users, error } = await supabase
+      .from('users')
+      .select('*')
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      throw error
     }
 
-    const content = await readFile(USERS_FILE, "utf-8")
-    const users: User[] = JSON.parse(content)
-
-    // Always ensure admin user exists with correct credentials
-    const adminIndex = users.findIndex((user) => user.username === "admin.admin")
-    if (adminIndex !== -1) {
-      users[adminIndex] = ADMIN_USER
-    } else {
-      users.unshift(ADMIN_USER)
-    }
-
-    return users
+    return users.map(dbUserToAppUser)
   } catch (error) {
     console.error("Error reading users:", error)
-    return [ADMIN_USER]
+    throw error
   }
 }
 
 export async function createUser(userData: Omit<User, "id" | "createdAt" | "updatedAt">): Promise<User> {
   try {
-    // Ensure DB directory exists
-    if (!existsSync(DB_PATH)) {
-      await mkdir(DB_PATH, { recursive: true })
-    }
-
-    const users = await getUsers()
-
-    // Validate user data
-    if (!userData.firstName || !userData.lastName || !userData.username || !userData.password) {
-      throw new Error("Missing required user data")
-    }
-
     // Prevent creating another admin.admin user
     if (userData.username === "admin.admin") {
       throw new Error("Cannot create another admin user")
     }
 
-    // Check if username already exists
-    if (users.some((user) => user.username === userData.username)) {
-      throw new Error("Username already exists")
+    const { data: user, error } = await supabase
+      .from('users')
+      .insert({
+        first_name: userData.firstName,
+        last_name: userData.lastName,
+        username: userData.username,
+        password: userData.password,
+        role: userData.role,
+        permissions: userData.permissions
+      })
+      .select()
+      .single()
+
+    if (error) {
+      throw error
     }
 
-    const newUser: User = {
-      ...userData,
-      id: (users.length + 1).toString(),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }
-
-    // Validate the new user object
-    if (!validateUserObject(newUser)) {
-      throw new Error("Invalid user data structure")
-    }
-
-    users.push(newUser)
-
-    // Write to file with proper formatting and error handling
-    try {
-      await writeFile(USERS_FILE, JSON.stringify(users, null, 2), "utf-8")
-    } catch (writeError) {
-      console.error("Error writing to users file:", writeError)
-      throw new Error("Failed to save user data")
-    }
-
-    console.log(`User created successfully: ${newUser.username}`)
-    return newUser
+    console.log(`User created successfully: ${userData.username}`)
+    return dbUserToAppUser(user)
   } catch (error) {
     console.error("Error creating user:", error)
     throw error instanceof Error ? error : new Error("Unknown error occurred while creating user")
@@ -205,28 +100,42 @@ export async function createUser(userData: Omit<User, "id" | "createdAt" | "upda
 
 export async function updateUser(id: string, userData: Partial<User>): Promise<User> {
   try {
-    const users = await getUsers()
-    const index = users.findIndex((user) => user.id === id)
-    
-    if (index === -1) {
+    // First check if user exists and is not admin
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('username')
+      .eq('id', id)
+      .single()
+
+    if (!existingUser) {
       throw new Error("User not found")
     }
 
-    // Prevent updating admin user
-    if (users[index].username === "admin.admin") {
+    if (existingUser.username === "admin.admin") {
       throw new Error("Cannot update admin user")
     }
 
-    const updatedUser = {
-      ...users[index],
-      ...userData,
-      updatedAt: new Date().toISOString(),
+    // Prepare update data
+    const updateData: any = {}
+    if (userData.firstName) updateData.first_name = userData.firstName
+    if (userData.lastName) updateData.last_name = userData.lastName
+    if (userData.username) updateData.username = userData.username
+    if (userData.password) updateData.password = userData.password
+    if (userData.role) updateData.role = userData.role
+    if (userData.permissions) updateData.permissions = userData.permissions
+
+    const { data: updatedUser, error } = await supabase
+      .from('users')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) {
+      throw error
     }
 
-    users[index] = updatedUser
-    await writeFile(USERS_FILE, JSON.stringify(users, null, 2))
-
-    return updatedUser
+    return dbUserToAppUser(updatedUser)
   } catch (error) {
     console.error("Error updating user:", error)
     throw error instanceof Error ? error : new Error("Unknown error occurred while updating user")
@@ -235,20 +144,29 @@ export async function updateUser(id: string, userData: Partial<User>): Promise<U
 
 export async function deleteUser(id: string): Promise<void> {
   try {
-    const users = await getUsers()
-    const user = users.find((u) => u.id === id)
+    // First check if user exists and is not admin
+    const { data: user } = await supabase
+      .from('users')
+      .select('username')
+      .eq('id', id)
+      .single()
 
     if (!user) {
       throw new Error("User not found")
     }
 
-    // Prevent deleting admin user
     if (user.username === "admin.admin") {
       throw new Error("Cannot delete admin user")
     }
 
-    const filteredUsers = users.filter((u) => u.id !== id)
-    await writeFile(USERS_FILE, JSON.stringify(filteredUsers, null, 2))
+    const { error } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      throw error
+    }
   } catch (error) {
     console.error("Error deleting user:", error)
     throw error instanceof Error ? error : new Error("Unknown error occurred while deleting user")
